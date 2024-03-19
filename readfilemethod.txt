@@ -1,0 +1,163 @@
+#include <stdio.h>
+#define MAXBUFLEN 1000000
+
+char source[MAXBUFLEN + 1];
+FILE *fp = fopen("foo.txt", "r");
+if (fp != NULL) {
+    size_t newLen = fread(source, sizeof(char), MAXBUFLEN, fp);
+    if ( ferror( fp ) != 0 ) {
+        fputs("Error reading file", stderr);
+    } else {
+        source[newLen++] = '\0'; /* Just to be safe. */
+    }
+
+    fclose(fp);
+}
+============================================================================
+============================================================================
+
+#include <stdio.h>
+#include <stdlib.h>
+
+char *source = NULL;
+FILE *fp = fopen("foo.txt", "r");
+if (fp != NULL) {
+    /* Go to the end of the file. */
+    if (fseek(fp, 0L, SEEK_END) == 0) {
+        /* Get the size of the file. */
+        long bufsize = ftell(fp);
+        if (bufsize == -1) { /* Error */ }
+
+        /* Allocate our buffer to that size. */
+        source = malloc(sizeof(char) * (bufsize + 1));
+
+        /* Go back to the start of the file. */
+        if (fseek(fp, 0L, SEEK_SET) != 0) { /* Error */ }
+
+        /* Read the entire file into memory. */
+        size_t newLen = fread(source, sizeof(char), bufsize, fp);
+        if ( ferror( fp ) != 0 ) {
+            fputs("Error reading file", stderr);
+        } else {
+            source[newLen++] = '\0'; /* Just to be safe. */
+        }
+    }
+    fclose(fp);
+}
+
+free(source); /* Don't forget to call free() later! */
+===========================================================
+===========================================================
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/time.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
+#define MAX_CLIENTS 10
+#define PORT 8080
+
+int main() {
+    int server_socket, client_socket[MAX_CLIENTS];
+    struct sockaddr_in server_addr, client_addr;
+    fd_set readfds;
+    int max_sd, activity, i, valread;
+    char buffer[1024] = {0};
+
+    // Create a server socket
+    if ((server_socket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+        perror("socket failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Set socket options
+    int opt = 1;
+    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR | SO_REUSEPORT, &opt, sizeof(opt))) {
+        perror("setsockopt");
+        exit(EXIT_FAILURE);
+    }
+
+    // Bind the socket
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(PORT);
+    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        perror("bind failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for incoming connections
+    if (listen(server_socket, 5) < 0) {
+        perror("listen");
+        exit(EXIT_FAILURE);
+    }
+
+    // Initialize client sockets
+    for (i = 0; i < MAX_CLIENTS; i++) {
+        client_socket[i] = 0;
+    }
+
+    while (1) {
+        FD_ZERO(&readfds);
+        FD_SET(server_socket, &readfds);
+        max_sd = server_socket;
+
+        // Add child sockets to set
+        for (i = 0; i < MAX_CLIENTS; i++) {
+            int sd = client_socket[i];
+            if (sd > 0) {
+                FD_SET(sd, &readfds);
+            }
+            if (sd > max_sd) {
+                max_sd = sd;
+            }
+        }
+
+        // Wait for activity on any socket
+        activity = select(max_sd + 1, &readfds, NULL, NULL, NULL);
+        if ((activity < 0) && (errno != EINTR)) {
+            perror("select error");
+        }
+
+        // Handle incoming connection
+        if (FD_ISSET(server_socket, &readfds)) {
+            int new_socket;
+            if ((new_socket = accept(server_socket, (struct sockaddr *)&client_addr, (socklen_t*)&client_addr)) < 0) {
+                perror("accept");
+                exit(EXIT_FAILURE);
+            }
+            printf("New connection, socket fd is %d, IP is: %s, port: %d\n", new_socket, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+
+            // Add new socket to array of sockets
+            for (i = 0; i < MAX_CLIENTS; i++) {
+                if (client_socket[i] == 0) {
+                    client_socket[i] = new_socket;
+                    break;
+                }
+            }
+        }
+
+        // Handle I/O from connected clients
+        for (i = 0; i < MAX_CLIENTS; i++) {
+            int sd = client_socket[i];
+            if (FD_ISSET(sd, &readfds)) {
+                if ((valread = read(sd, buffer, 1024)) == 0) {
+                    // Client disconnected
+                    printf("Client disconnected, socket fd is %d\n", sd);
+                    close(sd);
+                    client_socket[i] = 0;
+                } else {
+                    // Echo back to client
+                    buffer[valread] = '\0';
+                    printf("Received: %s", buffer);
+                    send(sd, buffer, strlen(buffer), 0);
+                }
+            }
+        }
+    }
+
+    return 0;
+}
